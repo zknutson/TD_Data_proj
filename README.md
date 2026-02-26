@@ -15,5 +15,5 @@ Time Domain Astrophysics Data Project
 - Using an example object, someone needs to plot a lightcurve after grabbing data from alerce.
 
 - Someone needs to write code which will query alerce for looped over
-- Someone needs to decide our sample selection.
+- Someone needs to decide our sample selection. (done by emily and christina)
 - 
