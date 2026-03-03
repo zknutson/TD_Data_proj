@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import alerce
 from pandas import DataFrame
-
+from astroquery.ipac.irsa.irsa_dust import IrsaDust
 
 @dataclass
 class Target:
@@ -22,4 +22,12 @@ class Target:
         mjd = detections["mjd"]
         mag = detections["magpsf"]
         return cls(oid, redshift, fid, mjd, mag)
+
+    @property
+    def extinction(self):
+        result = IrsaDust.get_query_table(
+            self.coordinates,
+            radius=0.1,
+            catalog="dr5"
+        )
     
