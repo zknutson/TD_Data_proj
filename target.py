@@ -1,8 +1,18 @@
 from dataclasses import dataclass
+from functools import cached_property
+from typing import NamedTuple
 import pandas as pd
 from alerce.core import Alerce
 from pandas import DataFrame
 from astroquery.ipac.irsa.irsa_dust import IrsaDust
+
+Observation = NamedTuple('Observation', [
+    ('redshift', float),
+    ('fid', int),
+    ('mjd', float),
+    ('mag', float),
+    ("A_SFD", object),
+])
 
 @dataclass
 class Target:
@@ -28,13 +38,32 @@ class Target:
         self.mjd: list[float] = detections["mjd"]
         self.mag: list[float] = detections["magpsf"]
 
-    @property
+    @cached_property
     def extinction(self):
         import astropy.coordinates as coord
         import astropy.units as u
         coords = coord.SkyCoord(self.coordinates[0], self.coordinates[1], frame='fk4',  unit=(u.hourangle, u.deg))
         table = IrsaDust.get_extinction_table(coords)  
-        return table
+        extinction_values = []
+        for fid in self.fid:
+            if fid == 1:
+                #get the row where the str8 column is "DSS-II g"
+                entry = table[:][table['Filter_name'] == "SDSS g"]
+            elif fid == 2:
+                entry = table[:][table['Filter_name'] == "SDSS r"]
+            elif fid == 3:
+                entry = table[:][table['Filter_name'] == "SDSS i"]
+            extinction_values.append(entry[0]["A_SFD"])
+        return extinction_values
+    
+    def __getitem__(self, idx):
+        return Observation(
+            self.redshift,
+            self.fid[idx],
+            self.mjd[idx],
+            self.mag[idx],
+            self.extinction[idx]
+        )
 
 def targets_from_TNS_csv(filename, stop_early=0):
     readingtable=pd.read_csv(filename)
