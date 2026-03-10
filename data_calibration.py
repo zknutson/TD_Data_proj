@@ -1,5 +1,9 @@
 #notes: _____________________________________________________________________
 #https://arxiv.org/pdf/2111.06519
+#https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.curve_fit.html
+#https://arxiv.org/html/2602.03638v1#S3
+#https://iopscience.iop.org/article/10.3847/1538-4357/adf222/pdf
+
 #BC_g = m_bol − m_g
 #so m_bol = m_g + BC_g(g−r)
 #provide BC (g-r)
@@ -9,8 +13,9 @@
 # 3. get m_bol
 
 #to do:
-#check extinction coef, same w format of extinction correction
+#check extinction coef, same w format of extinction correction (SDSS variables)
 #figure out ZTF fid int or str
+#add in curvefit
 #input target.py
 #write main pipeline for each targets
 #____________________________________________________________________________
@@ -21,6 +26,7 @@ from pandas import DataFrame
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import curve_fit
 from astropy.cosmology import Planck18
 import astropy.units as u
 
@@ -213,6 +219,7 @@ def process_target(target, t_explosion):
     E_51 = 10**log_E_51
     E_exp = E_51 * 1e51
     print(f"E_exp = {E_51:.3e} * 10^51 erg")
+
 
 
 #main w targets
