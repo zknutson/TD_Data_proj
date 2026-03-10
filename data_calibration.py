@@ -3,6 +3,8 @@
 #https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.curve_fit.html
 #https://arxiv.org/html/2602.03638v1#S3
 #https://iopscience.iop.org/article/10.3847/1538-4357/adf222/pdf
+# (curvefit alternative) https://iopscience.iop.org/article/10.1088/0004-637X/786/1/67/pdf
+#                       https://iraf.readthedocs.io/en/latest/tasks/utilities/curfit.html
 
 #BC_g = m_bol − m_g
 #so m_bol = m_g + BC_g(g−r)
@@ -13,9 +15,10 @@
 # 3. get m_bol
 
 #to do:
+
 #check extinction coef, same w format of extinction correction (SDSS variables)
 #figure out ZTF fid int or str
-#add in curvefit
+#chose method of tp if curvefit (olivares)/ slope 
 #input target.py
 #write main pipeline for each targets
 #____________________________________________________________________________
@@ -26,7 +29,7 @@ from pandas import DataFrame
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
-from scipy.optimize import curve_fit
+# from scipy.optimize import curve_fit
 from astropy.cosmology import Planck18
 import astropy.units as u
 
