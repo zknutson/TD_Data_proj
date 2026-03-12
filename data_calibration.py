@@ -23,6 +23,8 @@
 #write main pipeline for each targets
 #____________________________________________________________________________
 
+from dataclasses import dataclass
+
 import numpy as np
 import pandas
 from pandas import DataFrame
@@ -102,12 +104,12 @@ def BC_martinez2022(g_minus_r, phase='plateau'):
 def apply_bolometric_correction(obs_df, tp):
 
     df = obs_df.copy()
-    df['phase_label'] = assign_phase_label(df['phase_rest'].values, tp)
+    df['phase_label'] = assign_phase_label(df['mjd'].values, tp)
 
     M_bol_list, BC_list = [], []
 
     for _, row in df.iterrows():
-        BC = BC_martinez2022(row['color_gr'], phase=row['phase_label'])
+        BC = BC_martinez2022(row['color_gr'], phase=row['phase_label'])[0]
         M_bol_list.append(float(row['M_g'] + BC))
         BC_list.append(float(BC))
 
@@ -134,79 +136,94 @@ def nickel_mass(L_bol, t_rest_days):
 
 #for each target
 #ensure that certain details are right within this block
-def process_target(target, t_explosion):
-    sn_name = target.oid
-    z = target.redshift
-    ra, dec = target.coordinates
+def process_target(target):
+    #sn_name = target.oid
+    # z = target.redshift
+    #ra, dec = target.coordinates
 
     # build dataframe from target observations
-    obs_df = pandas.DataFrame({
-        'fid': target.fid,
-        'mjd': target.mjd,
-        'mag': target.mag,
-    })
-
-    #split into g and r bands, idk what this value is if its int or str
-
-    #g_df = obs_df[obs_df['fid'] == ?][['mjd', 'mag']].rename(columns={'mag': 'mag_g'})
-    #r_df = obs_df[obs_df['fid'] == ?][['mjd', 'mag']].rename(columns={'mag': 'mag_r'})
-
-    #extinction correction, check if using unit or AoverE unit
+    # obs_df = pandas.DataFrame({
+    #     'fid': target.fid,
+    #     'mjd': target.mjd,
+    #     'mag': target.mag,
+    # })
 
     #distance modulus
-    mu, d_L = distance_modulus(z)
-
+    # mu, d_L = distance_modulus(z)
+    merged = target.color_gr_df
     #merge g and r on nearest mjd
-    merged = pandas.merge_asof(
-        # g_df.sort_values('mjd'),
-        # r_df.sort_values('mjd'),
-        on='mjd',
-        tolerance= 2.0, #only match if within 2 days as said in class
-        direction='nearest').dropna(subset=['mag_g', 'mag_r'])
-
+    # merged = pandas.merge_asof(
+    #     target["g"].sort_values('mjd'),
+    #     target["r"].sort_values('mjd'),
+    #     on='mjd', 
+    #     suffixes=('_g', '_r'),
+    #     tolerance= 2.0, #only match if within 2 days as said in class
+    #     direction='nearest').dropna(subset=['mag_g', 'mag_r'])
+    #print(merged)
     #computes phase, color, absolute magnitude
-    merged['color_gr'] = merged['mag_g'] - merged['mag_r']
-    merged['M_g'] = merged['mag_g'] - mu
+    #merged['color_gr'] = merged['mag_g'] - merged['mag_r']
+    #if there's a duplicate day, just merge them and average abs_mag_g
+    if merged['mjd'].duplicated().any():
+        merged = merged.groupby('mjd').agg({
+            'color_gr': 'mean',
+            'abs_mag_g': 'mean'
+        }).reset_index()
+    merged['M_g'] = merged['abs_mag_g']
+    merged['mjd'] = merged['mjd'] - merged['mjd'].min() #or r, should be close enough since we matched on nearest mjd
 
     #need to find tp using days for each observation before BC corrections since L isnt found yet
-    days_temp = merged['phase_rest'].values
-    mag_temp = -merged['mag_g'].values #negative since mimics luminosity instead, brighter is smaller num basically
+    days_temp = merged['mjd'].values #relative days since first observation, not rest frame but should be close enough for tp estimation
+    mag_temp = -merged['abs_mag_g'].values #negative since mimics luminosity instead, brighter is smaller num basically
     slope = np.diff(mag_temp) / np.diff(days_temp) #hw 2, first derivitive test
     days_slope = (days_temp[:-1] + days_temp[1:]) / 2 #midpoint
     slope_smooth = gaussian_filter1d(slope, sigma=2)
+    #print(slope)
+    #print(slope_smooth)
 
     mask = (days_slope >= PLATEAU_SEARCH_START) & (days_slope <= PLATEAU_SEARCH_END)
-    local_min = np.argmin(slope_smooth[mask]) #finding min of FDT
+    #print(mask)
+    #print(slope_smooth)
+    local_min = np.argmin(slope_smooth[mask]) #finding min of FDT [mask]
     global_min = np.where(mask)[0][local_min]
     tp = days_slope[global_min]
-    print(f"tp: {tp:.1f}")
+    #print(f"tp: {tp:.1f}")
 
     #most of the rest of this is closely tied from hw 2
     #apply bc
     result_df = apply_bolometric_correction(merged, tp)
     result_df['L_bol'] = Mbol_to_luminosity(result_df['M_bol'].values)
+    if result_df['L_bol'].isnull().any():
+        print("Warning: NaN values found in L_bol. Check M_bol and BC calculations.")
+        print(result_df[result_df['L_bol'].isnull()])
+    #if any of Lbol is less than zero, print warning
+    if (result_df['L_bol'] < 0).any():
+        print("Warning: Negative values found in L_bol. Check M_bol and BC calculations.")
+        print(result_df[result_df['L_bol'] < 0])
+    days = result_df['mjd'].values
+    #print(days)
+    days_list = list(days)
 
-    days = result_df['phase_rest'].values
     luminosity = result_df['L_bol'].values
-    interp_func = interp1d(days, luminosity, kind='cubic')
+    interp_func = interp1d(days_list, luminosity, kind='cubic')
 
     #L50
     L50 = interp_func(50.0)
-    print(f"L50 = {L50:.3e} erg/s")
+    #print(f"L50 = {L50:.3e} erg/s")
 
     #recompute slope from bolometric luminosity for plot
     slope_bol = np.diff(luminosity) / np.diff(days)
     days_slope_bol = (days[:-1] + days[1:]) / 2
     slope_smooth_bol = gaussian_filter1d(slope_bol, sigma=2)
-
     mask_bol = (days_slope_bol >= PLATEAU_SEARCH_START) & (days_slope_bol <= PLATEAU_SEARCH_END)
+    if mask_bol.sum() > 0:
+        slope_at_tp = float(slope_smooth_bol[mask_bol][np.argmin(slope_smooth_bol[mask_bol])])
     slope_at_tp = float(slope_smooth_bol[mask_bol][np.argmin(slope_smooth_bol[mask_bol])]) if mask_bol.sum() > 0 else np.nan
 
     #nickel mass
     t_tail = min(150.0, days.max())
     luminosity_at_tail = float(interp_func(t_tail))
     M_Ni = nickel_mass(luminosity_at_tail, t_tail)
-    print(f"M_Ni = {M_Ni:.4e} M_sun")
+    #print(f"M_Ni = {M_Ni:.4e} M_sun")
 
     #explosion energy
     L_42 = L50 / 1e42
@@ -216,8 +233,14 @@ def process_target(target, t_explosion):
     log_E_51 = (a_E + b_E*np.log10(L_42) + c_E*np.log10(M_Ni/0.1) + d_E*np.log10(t_p2) + e_E*np.log10(R_500))
     E_51 = 10**log_E_51
     E_exp = E_51 * 1e51
-    print(f"E_exp = {E_51:.3e} * 10^51 erg")
-
-
-
-#main w targets
+    #print(f"E_exp = {E_51:.3e} * 10^51 erg")
+    return DataFrame({
+        'oid': [target.oid],
+        'tp': [tp],
+        'slope_at_tp': [slope_at_tp],
+        'L50': [L50],
+        'M_Ni': [M_Ni],
+        'E_exp': [E_exp],
+        'nobs': [len(result_df)],
+        'tobs': [result_df['mjd'].max() - result_df['mjd'].min()]
+    })

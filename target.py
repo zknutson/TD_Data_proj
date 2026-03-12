@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from functools import cached_property
 from typing import NamedTuple
+import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 from alerce.core import Alerce
 from pandas import DataFrame
@@ -8,16 +10,7 @@ from astroquery.ipac.irsa.irsa_dust import IrsaDust
 from astropy.cosmology import Planck18
 import numpy as np
 import astropy.units as u
-
-Observation = NamedTuple('Observation', [
-    ('fid', int),
-    ('mjd', float),
-    ('mag', float),
-    ('abs_mag', float),
-    ('obs_mag', float),
-    ('obs_abs_mag', float),
-    ("A_SFD", object),
-])
+from tqdm import tqdm
 
 def distance_modulus(z):
     d_L = Planck18.luminosity_distance(z).to(u.Mpc).value
@@ -32,17 +25,18 @@ class Target:
         self.coordinates: tuple[str, str] = (ra, dec)
         alerce = Alerce()
         print(f"Querying lightcurve for {oid}...")
-        try:
-            observations = alerce.query_lightcurve(
-                oid=oid,
-                format="pandas"
-            )
-        except Exception as e:
-            print(f"Error querying lightcurve for {oid}: {e}")
-            self.fid = []
-            self.mjd = []
-            self.mag = []
-            return
+        retry_count = 5
+        for attempt in range(retry_count):
+            try:
+                observations = alerce.query_lightcurve(
+                    oid=oid,
+                    format="pandas"
+                )
+                break  # Exit the loop if the query was successful
+            except Exception as e:
+                print(f"Error querying lightcurve for {oid} (attempt {attempt + 1}/{retry_count}): {e}")
+                if attempt == retry_count - 1:
+                    return  
         detections = DataFrame(observations["detections"][0])
         self.fid: list[int] = detections["fid"]
         self.mjd: list[float] = detections["mjd"]
@@ -116,37 +110,88 @@ class Target:
         idxs = [i for i, fid in enumerate(self.fid) if fid == 3]
         return self.grab_slice_df(idxs)
     
-    def gr_df(self, tolerance: float = 2):
-        for g_mjd in self.g_df["mjd"]:
-            nearest_delta_mjd = min(abs(r_mjd - g_mjd) for r_mjd in self.r_df["mjd"])
-            if nearest_delta_mjd > tolerance:
-                continue
-            
-
-        print(gr_df)
-        gr_df["delta_mjd"] = abs(gr_df["mjd_g"] - gr_df["mjd_r"])
-        gr_df = gr_df[gr_df["delta_mjd"] <= tolerance]
+    @cached_property
+    def color_gr_df(self):
+        gr_df = DataFrame({
+            "mjd": [],
+            "color_gr": [],
+            "abs_mag_g": [],
+        })
+        for g_obs in self.g_df.itertuples():
+            for r_obs in self.r_df.itertuples():
+                if abs(g_obs.mjd - r_obs.mjd) < 5:
+                    gr_df.loc[len(gr_df)] = {
+                        "mjd": g_obs.mjd,
+                        "color_gr": g_obs.obs_mag - r_obs.obs_mag,
+                        "abs_mag_g": g_obs.obs_abs_mag
+                    }
+                    break
         return gr_df
 
-def targets_from_TNS_csv(filename, stop_early=0):
-    readingtable=pd.read_csv(filename)
-    groups= readingtable["Disc. Internal Name"]
-    groups_nonan= groups.dropna()
-    listofZTFs= []
-    listofRedshifts= readingtable["Redshift"].tolist()
-    listofRAs= readingtable["RA"].tolist()
-    listofDecs= readingtable["DEC"].tolist()
+def _extract_tns_rows(filename, stop_early=0, start_at_end=False):
+    readingtable = pd.read_csv(filename)
+    filtered = readingtable[
+        readingtable["Disc. Internal Name"].fillna("").str.contains("ZTF")
+    ]
 
-    for i,row in enumerate(groups_nonan.tolist()):
-        if "ZTF" in row:
-            listofZTFs.append(row)
-    
+    if start_at_end:
+        filtered = filtered.iloc[::-1]
     if stop_early:
-        listofZTFs = listofZTFs[:stop_early]
+        filtered = filtered.iloc[:stop_early]
 
-    targets = []
-    for oid, redshift, ra, dec in zip(listofZTFs, listofRedshifts, listofRAs, listofDecs):
-        target = Target(oid, redshift, ra, dec)
-        targets.append(target)
-    
-    return targets
+    return list(
+        filtered[["Disc. Internal Name", "Redshift", "RA", "DEC"]]
+        .itertuples(index=False, name=None)
+    )
+
+
+def targets_from_TNS_csv(
+    filename,
+    stop_early=0,
+    start_at_end=False,
+    use_threads=False,
+    max_workers=None,
+    show_progress=True,
+):
+    rows = _extract_tns_rows(filename, stop_early=stop_early, start_at_end=start_at_end)
+
+    if not use_threads:
+        return [Target(oid, redshift, ra, dec) for oid, redshift, ra, dec in rows]
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(Target, oid, redshift, ra, dec): i
+            for i, (oid, redshift, ra, dec) in enumerate(rows)
+        }
+        results = [None] * len(rows)
+
+        iterator = as_completed(futures)
+        if show_progress:
+            iterator = tqdm(iterator, total=len(futures), desc="Loading targets", unit="target")
+
+        for future in iterator:
+            idx = futures[future]
+            results[idx] = future.result()
+
+        return results
+
+
+async def targets_from_TNS_csv_async(
+    filename,
+    stop_early=0,
+    start_at_end=False,
+    max_workers=None,
+    show_progress=True,
+):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        lambda: targets_from_TNS_csv(
+            filename,
+            stop_early=stop_early,
+            start_at_end=start_at_end,
+            use_threads=True,
+            max_workers=max_workers,
+            show_progress=show_progress,
+        ),
+    )
