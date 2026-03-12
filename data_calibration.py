@@ -48,7 +48,7 @@ L_SUN = 3.828e33
 TAU_NI = 8.8
 TAU_CO = 113.6
 
-PLATEAU_SEARCH_START = 60
+PLATEAU_SEARCH_START = 30
 PLATEAU_SEARCH_END   = 150
 
 #martinez table 4 g-r BC polynomial coeffs
@@ -79,7 +79,7 @@ def assign_phase_label(phase_rest_days, tp):
 
     phase_rest_days = np.asarray(phase_rest_days)
     labels = np.full(phase_rest_days.shape, 'plateau', dtype=object)
-    labels[phase_rest_days > tp] = 'tail'
+    labels[phase_rest_days > tp] = 'plateau'
     return labels
 
 def BC_martinez2022(g_minus_r, phase='plateau'):
@@ -192,22 +192,21 @@ def process_target(target):
     #apply bc
     result_df = apply_bolometric_correction(merged, tp)
     result_df['L_bol'] = Mbol_to_luminosity(result_df['M_bol'].values)
-    if result_df['L_bol'].isnull().any():
-        print("Warning: NaN values found in L_bol. Check M_bol and BC calculations.")
-        print(result_df[result_df['L_bol'].isnull()])
-    #if any of Lbol is less than zero, print warning
-    if (result_df['L_bol'] < 0).any():
-        print("Warning: Negative values found in L_bol. Check M_bol and BC calculations.")
-        print(result_df[result_df['L_bol'] < 0])
     days = result_df['mjd'].values
     #print(days)
     days_list = list(days)
 
     luminosity = result_df['L_bol'].values
-    interp_func = interp1d(days_list, luminosity, kind='cubic')
+    interp_func = interp1d(days_list, luminosity, kind='linear')
 
     #L50
     L50 = interp_func(50.0)
+    if L50 < 0:
+        #print(result_df)
+        plt.plot(days, luminosity)
+        plt.plot(np.arange(10, 50, 0.5), interp_func(np.arange(10, 50, 0.5)))
+        plt.show()
+        print("wtf")
     #print(f"L50 = {L50:.3e} erg/s")
 
     #recompute slope from bolometric luminosity for plot
